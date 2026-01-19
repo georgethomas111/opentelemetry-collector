@@ -27,3 +27,17 @@ npm test
 ```
 
 The Jest test posts sample OTLP/HTTP JSON metrics to `/v1/metrics` and verifies `/api/series` results.
+
+## Demo scripts
+
+Send demo OTLP metrics:
+
+```bash
+node scripts/otlp_demo_client.js
+```
+
+Query the data written by the demo client:
+
+```bash
+scripts/query_series.sh
+```
