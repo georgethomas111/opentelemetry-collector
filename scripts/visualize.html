@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Gossip Metrics Visualization</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #1b1f2a;
+      --muted: #566073;
+      --bg: #f7f5f1;
+      --panel: #ffffff;
+      --accent: #d36c2f;
+      --accent-soft: rgba(211, 108, 47, 0.15);
+      --edge: rgba(64, 74, 86, 0.45);
+    }
+
+    body {
+      margin: 0;
+      font-family: "IBM Plex Serif", "Georgia", serif;
+      background: radial-gradient(circle at top left, #fff8f0, #f2efe9 60%, #e8e4db 100%);
+      color: var(--ink);
+    }
+
+    header {
+      padding: 24px 32px 12px;
+    }
+
+    header h1 {
+      margin: 0 0 6px;
+      font-size: 28px;
+      letter-spacing: 0.5px;
+    }
+
+    header p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .controls {
+      display: flex;
+      gap: 12px;
+      padding: 0 32px 20px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .controls label {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .controls select,
+    .controls input,
+    .controls button {
+      font-family: "IBM Plex Sans", "Helvetica Neue", sans-serif;
+      padding: 8px 10px;
+      border: 1px solid #d5d1c9;
+      border-radius: 6px;
+      background: var(--panel);
+      color: var(--ink);
+    }
+
+    .controls button {
+      background: var(--accent);
+      color: white;
+      border: none;
+      cursor: pointer;
+    }
+
+    .quantiles {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .quantiles input {
+      margin-right: 4px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(320px, 1.2fr) minmax(320px, 0.8fr);
+      gap: 20px;
+      padding: 0 32px 32px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border-radius: 16px;
+      padding: 20px;
+      box-shadow: 0 20px 40px rgba(27, 31, 42, 0.08);
+    }
+
+    canvas {
+      width: 100% !important;
+      height: 360px !important;
+    }
+
+    #graph {
+      width: 100%;
+      height: 360px;
+      border-radius: 12px;
+      background: linear-gradient(140deg, #fffaf2, #f3efe6);
+      border: 1px solid #e0dad0;
+    }
+
+    .legend {
+      display: flex;
+      gap: 12px;
+      margin-top: 12px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .legend span {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+
+    .edge-key {
+      height: 3px;
+      width: 28px;
+      background: var(--edge);
+      border-radius: 2px;
+    }
+
+    @media (max-width: 960px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      canvas,
+      #graph {
+        height: 320px !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Gossip Metrics Board</h1>
+    <p>Live view of gossip delay and connection strength from the OTLP collector.</p>
+  </header>
+
+    <div class="controls">
+      <div>
+        <label for="windowSelect">Window</label><br>
+        <select id="windowSelect">
+          <option value="120000">Last 2 minutes</option>
+          <option value="300000" selected>Last 5 minutes</option>
+          <option value="600000">Last 10 minutes</option>
+        </select>
+      </div>
+      <div>
+        <label for="stepSelect">Step (ms)</label><br>
+        <select id="stepSelect">
+          <option value="2000">2000</option>
+          <option value="5000" selected>5000</option>
+          <option value="10000">10000</option>
+        </select>
+      </div>
+      <div>
+        <label for="refreshInput">Refresh (s)</label><br>
+        <input id="refreshInput" type="number" value="5" min="2" />
+      </div>
+      <div>
+        <label for="edgeSelect">Highlight edge</label><br>
+        <select id="edgeSelect">
+          <option value="">All edges</option>
+        </select>
+      </div>
+      <div>
+        <label>Quantiles</label><br>
+        <div class="quantiles">
+          <label><input type="checkbox" data-quantile="p25" checked> p25</label>
+          <label><input type="checkbox" data-quantile="p50" checked> p50</label>
+          <label><input type="checkbox" data-quantile="p90" checked> p90</label>
+          <label><input type="checkbox" data-quantile="p99" checked> p99</label>
+        </div>
+      </div>
+      <div>
+        <label>&nbsp;</label><br>
+        <button id="refreshButton">Refresh now</button>
+      </div>
+    </div>
+
+
+  <section class="layout">
+    <div class="panel">
+      <h2>Gossip Delay Quantiles</h2>
+      <canvas id="delayChart"></canvas>
+      <div class="legend">
+        <span><span class="dot"></span> Overall delay quantiles</span>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Connection Strength</h2>
+      <div id="graph"></div>
+      <div class="legend">
+        <span><span class="edge-key"></span> Thicker edge = more messages</span>
+      </div>
+    </div>
+  </section>
+
+  <script>
+    const delayCtx = document.getElementById("delayChart").getContext("2d");
+    const edgeSelect = document.getElementById("edgeSelect");
+    const refreshInput = document.getElementById("refreshInput");
+    const windowSelect = document.getElementById("windowSelect");
+    const stepSelect = document.getElementById("stepSelect");
+    const refreshButton = document.getElementById("refreshButton");
+    const quantileInputs = Array.from(document.querySelectorAll(".quantiles input"));
+
+    const chartColors = {
+      p25: "#d36c2f",
+      p50: "#2f7ed8",
+      p90: "#78b13f",
+      p99: "#d95f5f"
+    };
+
+    const delayChart = new Chart(delayCtx, {
+      type: "scatter",
+      data: {
+        datasets: []
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        parsing: false,
+        scales: {
+          x: {
+            type: "time",
+            time: {
+              unit: "minute"
+            },
+            title: { display: true, text: "Time" }
+          },
+          y: {
+            title: { display: true, text: "Delay (ms)" },
+            beginAtZero: true
+          }
+        },
+        plugins: {
+          legend: { position: "bottom" }
+        }
+      }
+    });
+
+    const graphContainer = document.getElementById("graph");
+    const width = graphContainer.clientWidth;
+    const height = graphContainer.clientHeight;
+
+    const svg = d3.select("#graph")
+      .append("svg")
+      .attr("width", width)
+      .attr("height", height);
+
+    const linkLayer = svg.append("g");
+    const nodeLayer = svg.append("g");
+
+    function buildEdgeLabel(edge) {
+      return `${edge.from_node} → ${edge.to_node}`;
+    }
+
+    quantileInputs.forEach((input) => {
+      input.addEventListener("change", () => {
+        if (!quantileInputs.some((item) => item.checked)) {
+          input.checked = true;
+        }
+      });
+    });
+
+    function toEpoch(dateString) {
+      return new Date(dateString).getTime();
+    }
+
+    function computeRange() {
+      const windowMs = Number(windowSelect.value);
+      const end = new Date();
+      const start = new Date(end.getTime() - windowMs);
+      return { start, end };
+    }
+
+    async function fetchSeries(metric, groupBy, agg) {
+      const { start, end } = computeRange();
+      const params = new URLSearchParams({
+        metric,
+        start: start.toISOString(),
+        end: end.toISOString(),
+        step: stepSelect.value,
+        agg
+      });
+      if (groupBy) {
+        params.set("group_by", groupBy);
+      }
+      const response = await fetch(`/api/series?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(`Series fetch failed: ${response.status}`);
+      }
+      return response.json();
+    }
+
+    function updateEdgeOptions(edges) {
+      const selected = edgeSelect.value;
+      edgeSelect.innerHTML = '<option value="">All edges</option>';
+      edges.forEach((edge) => {
+        const option = document.createElement("option");
+        option.value = edge.key;
+        option.textContent = edge.label;
+        edgeSelect.appendChild(option);
+      });
+      if (selected) {
+        edgeSelect.value = selected;
+      }
+    }
+
+    function normalizeQuantileSeries(series) {
+      const entry = series[0];
+      if (!entry) {
+        return [];
+      }
+      return entry.points.map((point) => ({
+        x: toEpoch(point.ts),
+        y: point.value
+      }));
+    }
+
+    function renderDelayChart(quantileSeries) {
+      const enabled = quantileInputs
+        .filter((input) => input.checked)
+        .map((input) => input.dataset.quantile);
+
+      const datasets = enabled.map((quantile) => ({
+        label: quantile.toUpperCase(),
+        data: quantileSeries[quantile] || [],
+        borderColor: chartColors[quantile],
+        backgroundColor: chartColors[quantile],
+        showLine: false,
+        borderWidth: 2,
+        pointRadius: 4
+      }));
+
+      delayChart.data.datasets = datasets;
+      delayChart.update();
+    }
+
+    function computeEdges(messageSeries) {
+      return messageSeries.map((entry) => {
+        const total = entry.points.reduce((sum, point) => sum + (point.value || 0), 0);
+        return {
+          from_node: entry.labels.from_node || "?",
+          to_node: entry.labels.to_node || "?",
+          count: total
+        };
+      }).filter((edge) => edge.count > 0);
+    }
+
+    function renderGraph(edges) {
+      const nodesMap = new Map();
+      edges.forEach((edge) => {
+        nodesMap.set(edge.from_node, { id: edge.from_node });
+        nodesMap.set(edge.to_node, { id: edge.to_node });
+      });
+
+      const nodes = Array.from(nodesMap.values());
+      const links = edges.map((edge) => ({
+        source: edge.from_node,
+        target: edge.to_node,
+        value: edge.count
+      }));
+
+      const maxValue = d3.max(links, (link) => link.value) || 1;
+      const widthScale = d3.scaleLinear().domain([0, maxValue]).range([1, 8]);
+
+      const simulation = d3.forceSimulation(nodes)
+        .force("charge", d3.forceManyBody().strength(-220))
+        .force("center", d3.forceCenter(width / 2, height / 2))
+        .force("link", d3.forceLink(links).id((d) => d.id).distance(120));
+
+      const linkSelection = linkLayer
+        .selectAll("line")
+        .data(links, (d) => `${d.source.id || d.source}-${d.target.id || d.target}`);
+
+      linkSelection.exit().remove();
+
+      const linkEnter = linkSelection
+        .enter()
+        .append("line")
+        .attr("stroke", "#5d6675")
+        .attr("stroke-opacity", 0.6);
+
+      const linkMerge = linkEnter.merge(linkSelection);
+
+      linkMerge.attr("stroke-width", (d) => widthScale(d.value));
+
+      const nodeSelection = nodeLayer
+        .selectAll("g")
+        .data(nodes, (d) => d.id);
+
+      nodeSelection.exit().remove();
+
+      const nodeEnter = nodeSelection
+        .enter()
+        .append("g")
+        .call(
+          d3.drag()
+            .on("start", (event, d) => {
+              if (!event.active) simulation.alphaTarget(0.3).restart();
+              d.fx = d.x;
+              d.fy = d.y;
+            })
+            .on("drag", (event, d) => {
+              d.fx = event.x;
+              d.fy = event.y;
+            })
+            .on("end", (event, d) => {
+              if (!event.active) simulation.alphaTarget(0);
+              d.fx = null;
+              d.fy = null;
+            })
+        );
+
+      nodeEnter.append("circle")
+        .attr("r", 20)
+        .attr("fill", "#f2c299")
+        .attr("stroke", "#a1592f")
+        .attr("stroke-width", 1.5);
+
+      nodeEnter.append("text")
+        .attr("text-anchor", "middle")
+        .attr("dy", 5)
+        .attr("font-size", 11)
+        .attr("fill", "#2c2f36")
+        .text((d) => d.id);
+
+      const nodeMerge = nodeEnter.merge(nodeSelection);
+
+      simulation.on("tick", () => {
+        linkMerge
+          .attr("x1", (d) => d.source.x)
+          .attr("y1", (d) => d.source.y)
+          .attr("x2", (d) => d.target.x)
+          .attr("y2", (d) => d.target.y);
+
+        nodeMerge.attr("transform", (d) => `translate(${d.x},${d.y})`);
+      });
+    }
+
+    async function refresh() {
+      try {
+        const quantiles = ["p25", "p50", "p90", "p99"];
+        const quantileResponses = await Promise.all(
+          quantiles.map((quantile) => fetchSeries("gossip_delay_ms", "", quantile))
+        );
+
+        const quantileSeries = {};
+        quantileResponses.forEach((response, index) => {
+          quantileSeries[quantiles[index]] = normalizeQuantileSeries(response.series || []);
+        });
+        renderDelayChart(quantileSeries);
+
+        const messageResponse = await fetchSeries("gossip_message_total", "from_node,to_node", "sum");
+        const edges = computeEdges(messageResponse.series || []);
+        const edgeOptions = edges.map((edge) => ({
+          key: `${edge.from_node}-${edge.to_node}`,
+          label: `${edge.from_node} → ${edge.to_node}`
+        }));
+        updateEdgeOptions(edgeOptions);
+        renderGraph(edges);
+      } catch (error) {
+        console.error(error.message);
+      }
+    }
+
+    let refreshTimer = null;
+    function scheduleRefresh() {
+      if (refreshTimer) {
+        clearInterval(refreshTimer);
+      }
+      const intervalMs = Math.max(2000, Number(refreshInput.value || 5) * 1000);
+      refreshTimer = setInterval(refresh, intervalMs);
+    }
+
+    refreshButton.addEventListener("click", refresh);
+    refreshInput.addEventListener("change", scheduleRefresh);
+    windowSelect.addEventListener("change", refresh);
+    stepSelect.addEventListener("change", refresh);
+    edgeSelect.addEventListener("change", refresh);
+    quantileInputs.forEach((input) => input.addEventListener("change", refresh));
+
+    refresh();
+    scheduleRefresh();
+  </script>
+</body>
+</html>

@@ -41,3 +41,11 @@ Query the data written by the demo client:
 ```bash
 scripts/query_series.sh
 ```
+
+Start the visualization server:
+
+```bash
+node scripts/visualize_server.js
+```
+
+Open `http://localhost:4320` to see the dashboard.

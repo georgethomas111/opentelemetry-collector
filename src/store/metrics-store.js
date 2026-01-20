@@ -7,6 +7,10 @@ export class MetricsStore {
     throw new Error("Not implemented");
   }
 
+  estimateQuantile() {
+    throw new Error("Not implemented");
+  }
+
   listMetrics() {
     throw new Error("Not implemented");
   }

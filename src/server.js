@@ -34,7 +34,8 @@ export function createServer({ store }) {
             end: "End time (ISO or epoch ms)",
             step: "Bucket size in ms",
             group_by: "Comma-separated label keys",
-            agg: "avg | sum | min | max | count | last"
+            agg: "avg | sum | min | max | count | last | p25 | p50 | p90 | p99",
+            nocompact: "Set true to include empty buckets"
           },
           example: "/api/series?metric=gossip_delay_ms&start=2026-01-19T10:00:00Z&end=2026-01-19T10:05:00Z&step=5000&group_by=from_node,to_node&agg=avg"
         },
@@ -71,7 +72,8 @@ export function createServer({ store }) {
       end: req.query.end,
       step: req.query.step,
       groupBy,
-      agg: req.query.agg
+      agg: req.query.agg,
+      compact: req.query.nocompact !== "true"
     });
 
     res.json({ ok: true, ...result });

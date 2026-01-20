@@ -72,6 +72,44 @@ function normalizeDataPoint(metricName, type, dataPoint, resourceAttributes) {
   };
 }
 
+function normalizeHistogramDataPoint(metricName, dataPoint, resourceAttributes) {
+  if (!dataPoint || !Array.isArray(dataPoint.bucketCounts) || !Array.isArray(dataPoint.explicitBounds)) {
+    return null;
+  }
+
+  const timestampMs = toTimestampMs(dataPoint.timeUnixNano) || Date.now();
+  const attributes = parseAttributes(dataPoint.attributes);
+  const count = Number(dataPoint.count ?? 0);
+  const sum = Number(dataPoint.sum ?? 0);
+  const bucketCounts = dataPoint.bucketCounts.map((entry) => Number(entry));
+  const explicitBounds = dataPoint.explicitBounds.map((entry) => Number(entry));
+
+  if (!Number.isFinite(count) || !Number.isFinite(sum) || count <= 0) {
+    return null;
+  }
+  if (bucketCounts.some((entry) => Number.isNaN(entry)) || explicitBounds.some((entry) => Number.isNaN(entry))) {
+    return null;
+  }
+  if (bucketCounts.length !== explicitBounds.length + 1) {
+    return null;
+  }
+
+  return {
+    metricName,
+    type: "histogram",
+    value: sum / count,
+    timestampMs,
+    attributes,
+    resourceAttributes,
+    histogram: {
+      count,
+      sum,
+      bucketCounts,
+      explicitBounds
+    }
+  };
+}
+
 export function parseOtlpMetrics(body) {
   const records = [];
   if (!body || !Array.isArray(body.resourceMetrics)) {
@@ -109,20 +147,8 @@ export function parseOtlpMetrics(body) {
 
         if (metric.histogram?.dataPoints) {
           for (const dataPoint of metric.histogram.dataPoints) {
-            if (!dataPoint || !Array.isArray(dataPoint.bucketCounts)) {
-              continue;
-            }
-
-            const totalCount = dataPoint.count || 0;
-            const totalSum = dataPoint.sum || 0;
-            if (totalCount === 0) {
-              continue;
-            }
-
-            const average = totalSum / totalCount;
-            const record = normalizeDataPoint(metric.name, "histogram", dataPoint, resourceAttributes);
+            const record = normalizeHistogramDataPoint(metric.name, dataPoint, resourceAttributes);
             if (record) {
-              record.value = average;
               records.push(record);
             }
           }

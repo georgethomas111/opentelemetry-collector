@@ -78,9 +78,41 @@ export class InMemoryMetricsStore extends MetricsStore {
           sum: 0,
           min: null,
           max: null,
-          last: null
+          last: null,
+          histogram: null
         };
         metricSeries.buckets.set(bucketStart, bucket);
+      }
+
+      if (record.type === "histogram" && record.histogram) {
+        const incoming = record.histogram;
+        if (!bucket.histogram) {
+          bucket.histogram = {
+            count: 0,
+            sum: 0,
+            bucketCounts: Array.from(incoming.bucketCounts),
+            explicitBounds: Array.from(incoming.explicitBounds)
+          };
+        }
+
+        const boundsMatch =
+          bucket.histogram.explicitBounds.length === incoming.explicitBounds.length &&
+          bucket.histogram.explicitBounds.every((value, index) => value === incoming.explicitBounds[index]);
+
+        if (boundsMatch) {
+          bucket.histogram.count += incoming.count;
+          bucket.histogram.sum += incoming.sum;
+          bucket.histogram.bucketCounts = bucket.histogram.bucketCounts.map(
+            (value, index) => value + (incoming.bucketCounts[index] || 0)
+          );
+          bucket.count += incoming.count;
+          bucket.sum += incoming.sum;
+          const avg = incoming.sum / incoming.count;
+          bucket.min = bucket.min === null ? avg : Math.min(bucket.min, avg);
+          bucket.max = bucket.max === null ? avg : Math.max(bucket.max, avg);
+          bucket.last = avg;
+        }
+        continue;
       }
 
       const value = Number(record.value);
@@ -107,7 +139,7 @@ export class InMemoryMetricsStore extends MetricsStore {
     }
   }
 
-  querySeries({ metric, start, end, step, groupBy, agg } = {}) {
+  querySeries({ metric, start, end, step, groupBy, agg, compact = true } = {}) {
     const now = Date.now();
     const startDate = toDate(start, new Date(now - this.windowMs));
     const endDate = toDate(end, new Date(now));
@@ -143,6 +175,7 @@ export class InMemoryMetricsStore extends MetricsStore {
         let min = null;
         let max = null;
         let last = null;
+        let histogram = null;
 
         for (const bucket of metricSeries.buckets.values()) {
           if (bucket.ts >= windowStart && bucket.ts < windowEnd) {
@@ -151,6 +184,29 @@ export class InMemoryMetricsStore extends MetricsStore {
             min = min === null ? bucket.min : Math.min(min, bucket.min);
             max = max === null ? bucket.max : Math.max(max, bucket.max);
             last = bucket.last;
+
+            if (bucket.histogram) {
+              if (!histogram) {
+                histogram = {
+                  count: 0,
+                  sum: 0,
+                  bucketCounts: Array.from(bucket.histogram.bucketCounts),
+                  explicitBounds: Array.from(bucket.histogram.explicitBounds)
+                };
+              }
+
+              const boundsMatch =
+                histogram.explicitBounds.length === bucket.histogram.explicitBounds.length &&
+                histogram.explicitBounds.every((value, index) => value === bucket.histogram.explicitBounds[index]);
+
+              if (boundsMatch) {
+                histogram.count += bucket.histogram.count;
+                histogram.sum += bucket.histogram.sum;
+                histogram.bucketCounts = histogram.bucketCounts.map(
+                  (value, index) => value + (bucket.histogram.bucketCounts[index] || 0)
+                );
+              }
+            }
           }
         }
 
@@ -172,6 +228,13 @@ export class InMemoryMetricsStore extends MetricsStore {
             case "last":
               value = last;
               break;
+            case "p50":
+            case "p90":
+            case "p99":
+              if (histogram) {
+                value = this.estimateQuantile(histogram, aggregation);
+              }
+              break;
             case "avg":
             default:
               value = sum / count;
@@ -179,7 +242,9 @@ export class InMemoryMetricsStore extends MetricsStore {
           }
         }
 
-        points.push({ ts: new Date(windowStart).toISOString(), value });
+        if (!compact || value !== null) {
+          points.push({ ts: new Date(windowStart).toISOString(), value });
+        }
       }
 
       results.push({ labels: groupedLabels, points });
@@ -192,6 +257,34 @@ export class InMemoryMetricsStore extends MetricsStore {
       stepMs: bucketStep,
       series: results
     };
+  }
+
+  estimateQuantile(histogram, aggregation) {
+    if (!histogram || histogram.count <= 0) {
+      return null;
+    }
+
+    const quantileMap = { p25: 0.25, p50: 0.5, p90: 0.9, p99: 0.99 };
+    const target = quantileMap[aggregation] ?? 0.5;
+    const targetRank = histogram.count * target;
+    let cumulative = 0;
+
+    for (let i = 0; i < histogram.bucketCounts.length; i += 1) {
+      cumulative += histogram.bucketCounts[i];
+      if (cumulative >= targetRank) {
+        if (i === 0) {
+          return histogram.explicitBounds[0] ?? 0;
+        }
+        if (i > histogram.explicitBounds.length - 1) {
+          return histogram.explicitBounds[histogram.explicitBounds.length - 1] ?? null;
+        }
+        const lower = histogram.explicitBounds[i - 1] ?? 0;
+        const upper = histogram.explicitBounds[i] ?? lower;
+        return (lower + upper) / 2;
+      }
+    }
+
+    return histogram.explicitBounds[histogram.explicitBounds.length - 1] ?? null;
   }
 
   listMetrics() {
