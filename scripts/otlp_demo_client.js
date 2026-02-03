@@ -10,27 +10,7 @@ function nowNano() {
   return String(Date.now() * 1e6);
 }
 
-function buildPayload({ points, counters }) {
-  const metrics = [
-    {
-      name: "gossip_delay_ms",
-      histogram: {
-        dataPoints: points
-      }
-    }
-  ];
-
-  if (counters && counters.length) {
-    metrics.push({
-      name: "gossip_message_total",
-      sum: {
-        aggregationTemporality: "AGGREGATION_TEMPORALITY_DELTA",
-        isMonotonic: true,
-        dataPoints: counters
-      }
-    });
-  }
-
+function buildPayload({ points }) {
   return {
     resourceMetrics: [
       {
@@ -42,7 +22,14 @@ function buildPayload({ points, counters }) {
         },
         scopeMetrics: [
           {
-            metrics
+            metrics: [
+              {
+                name: "gossip_delay_ms",
+                histogram: {
+                  dataPoints: points
+                }
+              }
+            ]
           }
         ]
       }
@@ -65,7 +52,7 @@ async function postPayload(payload) {
 
 const delayBounds = [10, 20, 30, 40, 50, 60, 80, 100, 150, 200];
 
-function buildDelayPoint({ value, from, to, timeUnixNano }) {
+function buildDelayPoint({ value, node, timeUnixNano }) {
   const buckets = Array.from({ length: delayBounds.length + 1 }, () => 0);
   const bucketIndex = delayBounds.findIndex((bound) => value <= bound);
   const index = bucketIndex === -1 ? delayBounds.length : bucketIndex;
@@ -78,30 +65,13 @@ function buildDelayPoint({ value, from, to, timeUnixNano }) {
     bucketCounts: buckets,
     explicitBounds: delayBounds,
     attributes: [
-      { key: "from_node", value: { stringValue: String(from) } },
-      { key: "to_node", value: { stringValue: String(to) } }
+      { key: "node", value: { stringValue: String(node) } }
     ]
   };
 }
 
-function buildCounterPoint({ from, to, timeUnixNano }) {
-  return {
-    timeUnixNano: timeUnixNano || nowNano(),
-    asInt: "1",
-    attributes: [
-      { key: "from_node", value: { stringValue: String(from) } },
-      { key: "to_node", value: { stringValue: String(to) } }
-    ]
-  };
-}
-
-function randomNodePair(maxNodes) {
-  const from = Math.floor(Math.random() * maxNodes) + 1;
-  let to = Math.floor(Math.random() * maxNodes) + 1;
-  while (to === from) {
-    to = Math.floor(Math.random() * maxNodes) + 1;
-  }
-  return { from, to };
+function randomNode(maxNodes) {
+  return Math.floor(Math.random() * maxNodes) + 1;
 }
 
 function sleep(ms) {
@@ -110,28 +80,25 @@ function sleep(ms) {
 
 async function run() {
   const historyPoints = [];
-  const historyCounters = [];
   const totalHistoryPoints = nodeCount * 6;
   const now = Date.now();
   const historySpanMs = historyMinutes * 60 * 1000;
 
   for (let i = 0; i < totalHistoryPoints; i += 1) {
-    const { from, to } = randomNodePair(nodeCount);
+    const node = randomNode(nodeCount);
     const value = 30 + Math.random() * 40;
     const offsetMs = Math.floor(Math.random() * historySpanMs);
     const timeUnixNano = String((now - offsetMs) * 1e6);
-    historyPoints.push(buildDelayPoint({ value, from, to, timeUnixNano }));
-    historyCounters.push(buildCounterPoint({ from, to, timeUnixNano }));
+    historyPoints.push(buildDelayPoint({ value, node, timeUnixNano }));
   }
 
-  await postPayload(buildPayload({ points: historyPoints, counters: historyCounters }));
+  await postPayload(buildPayload({ points: historyPoints }));
 
   for (let i = 0; i < followUpCount; i += 1) {
-    const { from, to } = randomNodePair(nodeCount);
+    const node = randomNode(nodeCount);
     const value = 35 + Math.random() * 25;
-    const point = buildDelayPoint({ value, from, to });
-    const counter = buildCounterPoint({ from, to });
-    await postPayload(buildPayload({ points: [point], counters: [counter] }));
+    const point = buildDelayPoint({ value, node });
+    await postPayload(buildPayload({ points: [point] }));
     await sleep(followUpDelayMs);
   }
 

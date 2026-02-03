@@ -4,8 +4,8 @@
   <meta charset="UTF-8">
   <title>Gossip Metrics Visualization</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@1.2.1"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
-  <script src="https://d3js.org/d3.v7.min.js"></script>
   <style>
     :root {
       color-scheme: light;
@@ -15,7 +15,6 @@
       --panel: #ffffff;
       --accent: #d36c2f;
       --accent-soft: rgba(211, 108, 47, 0.15);
-      --edge: rgba(64, 74, 86, 0.45);
     }
 
     body {
@@ -85,7 +84,7 @@
 
     .layout {
       display: grid;
-      grid-template-columns: minmax(320px, 1.2fr) minmax(320px, 0.8fr);
+      grid-template-columns: 1fr 1fr;
       gap: 20px;
       padding: 0 32px 32px;
     }
@@ -99,16 +98,9 @@
 
     canvas {
       width: 100% !important;
-      height: 360px !important;
+      height: 300px !important;
     }
 
-    #graph {
-      width: 100%;
-      height: 360px;
-      border-radius: 12px;
-      background: linear-gradient(140deg, #fffaf2, #f3efe6);
-      border: 1px solid #e0dad0;
-    }
 
     .legend {
       display: flex;
@@ -132,21 +124,10 @@
       background: var(--accent);
     }
 
-    .edge-key {
-      height: 3px;
-      width: 28px;
-      background: var(--edge);
-      border-radius: 2px;
-    }
 
     @media (max-width: 960px) {
       .layout {
         grid-template-columns: 1fr;
-      }
-
-      canvas,
-      #graph {
-        height: 320px !important;
       }
     }
   </style>
@@ -179,12 +160,6 @@
         <input id="refreshInput" type="number" value="5" min="2" />
       </div>
       <div>
-        <label for="edgeSelect">Highlight edge</label><br>
-        <select id="edgeSelect">
-          <option value="">All edges</option>
-        </select>
-      </div>
-      <div>
         <label>Quantiles</label><br>
         <div class="quantiles">
           <label><input type="checkbox" data-quantile="p25" checked> p25</label>
@@ -209,17 +184,17 @@
       </div>
     </div>
     <div class="panel">
-      <h2>Connection Strength</h2>
-      <div id="graph"></div>
+      <h2>Raw Gossip Delay</h2>
+      <canvas id="rawChart"></canvas>
       <div class="legend">
-        <span><span class="edge-key"></span> Thicker edge = more messages</span>
+        <span><span class="dot"></span> Raw delay by node</span>
       </div>
     </div>
   </section>
 
   <script>
     const delayCtx = document.getElementById("delayChart").getContext("2d");
-    const edgeSelect = document.getElementById("edgeSelect");
+    const rawCtx = document.getElementById("rawChart").getContext("2d");
     const refreshInput = document.getElementById("refreshInput");
     const windowSelect = document.getElementById("windowSelect");
     const stepSelect = document.getElementById("stepSelect");
@@ -232,6 +207,26 @@
       p90: "#78b13f",
       p99: "#d95f5f"
     };
+
+    function zoomOptions() {
+      return {
+        zoom: {
+          drag: {
+            enabled: true,
+            borderColor: "rgba(225,225,225,0.3)",
+            borderWidth: 2,
+            backgroundColor: "rgba(225,225,225,0.3)"
+          },
+          mode: "x",
+          wheel: { enabled: false },
+          pinch: { enabled: true }
+        },
+        pan: {
+          enabled: true,
+          mode: "x"
+        }
+      };
+    }
 
     const delayChart = new Chart(delayCtx, {
       type: "scatter",
@@ -257,26 +252,41 @@
           }
         },
         plugins: {
-          legend: { position: "bottom" }
+          legend: { position: "bottom" },
+          zoom: zoomOptions()
         }
       }
     });
 
-    const graphContainer = document.getElementById("graph");
-    const width = graphContainer.clientWidth;
-    const height = graphContainer.clientHeight;
-
-    const svg = d3.select("#graph")
-      .append("svg")
-      .attr("width", width)
-      .attr("height", height);
-
-    const linkLayer = svg.append("g");
-    const nodeLayer = svg.append("g");
-
-    function buildEdgeLabel(edge) {
-      return `${edge.from_node} → ${edge.to_node}`;
-    }
+    const rawChart = new Chart(rawCtx, {
+      type: "scatter",
+      data: {
+        datasets: []
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        parsing: false,
+        scales: {
+          x: {
+            type: "time",
+            time: {
+              unit: "minute"
+            },
+            title: { display: true, text: "Time" }
+          },
+          y: {
+            title: { display: true, text: "Delay (ms)" },
+            beginAtZero: true
+          }
+        },
+        plugins: {
+          legend: { position: "bottom" },
+          zoom: zoomOptions()
+        }
+      }
+    });
 
     quantileInputs.forEach((input) => {
       input.addEventListener("change", () => {
@@ -316,20 +326,6 @@
       return response.json();
     }
 
-    function updateEdgeOptions(edges) {
-      const selected = edgeSelect.value;
-      edgeSelect.innerHTML = '<option value="">All edges</option>';
-      edges.forEach((edge) => {
-        const option = document.createElement("option");
-        option.value = edge.key;
-        option.textContent = edge.label;
-        edgeSelect.appendChild(option);
-      });
-      if (selected) {
-        edgeSelect.value = selected;
-      }
-    }
-
     function normalizeQuantileSeries(series) {
       const entry = series[0];
       if (!entry) {
@@ -360,106 +356,38 @@
       delayChart.update();
     }
 
-    function computeEdges(messageSeries) {
-      return messageSeries.map((entry) => {
-        const total = entry.points.reduce((sum, point) => sum + (point.value || 0), 0);
-        return {
-          from_node: entry.labels.from_node || "?",
-          to_node: entry.labels.to_node || "?",
-          count: total
-        };
-      }).filter((edge) => edge.count > 0);
+    function normalizeNodeSeries(series) {
+      return series.map((entry) => ({
+        node: entry.labels.node || "unknown",
+        points: entry.points.map((point) => ({
+          x: toEpoch(point.ts),
+          y: point.value
+        }))
+      }));
     }
 
-    function renderGraph(edges) {
-      const nodesMap = new Map();
-      edges.forEach((edge) => {
-        nodesMap.set(edge.from_node, { id: edge.from_node });
-        nodesMap.set(edge.to_node, { id: edge.to_node });
-      });
+    function renderRawChart(nodeSeries) {
+      const palette = [
+        "#d36c2f",
+        "#2f7ed8",
+        "#78b13f",
+        "#d95f5f",
+        "#7b60d1",
+        "#2da6a1",
+        "#b24a79",
+        "#5a7a3b"
+      ];
 
-      const nodes = Array.from(nodesMap.values());
-      const links = edges.map((edge) => ({
-        source: edge.from_node,
-        target: edge.to_node,
-        value: edge.count
+      const datasets = nodeSeries.map((entry, index) => ({
+        label: entry.node,
+        data: entry.points,
+        backgroundColor: palette[index % palette.length],
+        borderColor: palette[index % palette.length],
+        pointRadius: 4
       }));
 
-      const maxValue = d3.max(links, (link) => link.value) || 1;
-      const widthScale = d3.scaleLinear().domain([0, maxValue]).range([1, 8]);
-
-      const simulation = d3.forceSimulation(nodes)
-        .force("charge", d3.forceManyBody().strength(-220))
-        .force("center", d3.forceCenter(width / 2, height / 2))
-        .force("link", d3.forceLink(links).id((d) => d.id).distance(120));
-
-      const linkSelection = linkLayer
-        .selectAll("line")
-        .data(links, (d) => `${d.source.id || d.source}-${d.target.id || d.target}`);
-
-      linkSelection.exit().remove();
-
-      const linkEnter = linkSelection
-        .enter()
-        .append("line")
-        .attr("stroke", "#5d6675")
-        .attr("stroke-opacity", 0.6);
-
-      const linkMerge = linkEnter.merge(linkSelection);
-
-      linkMerge.attr("stroke-width", (d) => widthScale(d.value));
-
-      const nodeSelection = nodeLayer
-        .selectAll("g")
-        .data(nodes, (d) => d.id);
-
-      nodeSelection.exit().remove();
-
-      const nodeEnter = nodeSelection
-        .enter()
-        .append("g")
-        .call(
-          d3.drag()
-            .on("start", (event, d) => {
-              if (!event.active) simulation.alphaTarget(0.3).restart();
-              d.fx = d.x;
-              d.fy = d.y;
-            })
-            .on("drag", (event, d) => {
-              d.fx = event.x;
-              d.fy = event.y;
-            })
-            .on("end", (event, d) => {
-              if (!event.active) simulation.alphaTarget(0);
-              d.fx = null;
-              d.fy = null;
-            })
-        );
-
-      nodeEnter.append("circle")
-        .attr("r", 20)
-        .attr("fill", "#f2c299")
-        .attr("stroke", "#a1592f")
-        .attr("stroke-width", 1.5);
-
-      nodeEnter.append("text")
-        .attr("text-anchor", "middle")
-        .attr("dy", 5)
-        .attr("font-size", 11)
-        .attr("fill", "#2c2f36")
-        .text((d) => d.id);
-
-      const nodeMerge = nodeEnter.merge(nodeSelection);
-
-      simulation.on("tick", () => {
-        linkMerge
-          .attr("x1", (d) => d.source.x)
-          .attr("y1", (d) => d.source.y)
-          .attr("x2", (d) => d.target.x)
-          .attr("y2", (d) => d.target.y);
-
-        nodeMerge.attr("transform", (d) => `translate(${d.x},${d.y})`);
-      });
+      rawChart.data.datasets = datasets;
+      rawChart.update();
     }
 
     async function refresh() {
@@ -475,14 +403,9 @@
         });
         renderDelayChart(quantileSeries);
 
-        const messageResponse = await fetchSeries("gossip_message_total", "from_node,to_node", "sum");
-        const edges = computeEdges(messageResponse.series || []);
-        const edgeOptions = edges.map((edge) => ({
-          key: `${edge.from_node}-${edge.to_node}`,
-          label: `${edge.from_node} → ${edge.to_node}`
-        }));
-        updateEdgeOptions(edgeOptions);
-        renderGraph(edges);
+        const rawResponse = await fetchSeries("gossip_delay_ms", "node", "avg");
+        const nodeSeries = normalizeNodeSeries(rawResponse.series || []);
+        renderRawChart(nodeSeries);
       } catch (error) {
         console.error(error.message);
       }
@@ -501,11 +424,13 @@
     refreshInput.addEventListener("change", scheduleRefresh);
     windowSelect.addEventListener("change", refresh);
     stepSelect.addEventListener("change", refresh);
-    edgeSelect.addEventListener("change", refresh);
     quantileInputs.forEach((input) => input.addEventListener("change", refresh));
 
     refresh();
     scheduleRefresh();
+
+    delayChart.canvas.addEventListener("dblclick", () => delayChart.resetZoom());
+    rawChart.canvas.addEventListener("dblclick", () => rawChart.resetZoom());
   </script>
 </body>
 </html>

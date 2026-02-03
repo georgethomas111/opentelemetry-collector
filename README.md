@@ -30,13 +30,13 @@ The Jest test posts sample OTLP/HTTP JSON metrics to `/v1/metrics` and verifies 
 
 ## Demo scripts
 
-Send demo OTLP metrics:
+Send demo OTLP metrics (node-scoped gossip delay):
 
 ```bash
 node scripts/otlp_demo_client.js
 ```
 
-Query the data written by the demo client:
+Query the data written by the demo client (gossip delay by node):
 
 ```bash
 scripts/query_series.sh
