@@ -70,17 +70,6 @@
       cursor: pointer;
     }
 
-    .quantiles {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      font-size: 12px;
-      color: var(--muted);
-    }
-
-    .quantiles input {
-      margin-right: 4px;
-    }
 
     .layout {
       display: grid;
@@ -160,15 +149,6 @@
         <input id="refreshInput" type="number" value="5" min="2" />
       </div>
       <div>
-        <label>Quantiles</label><br>
-        <div class="quantiles">
-          <label><input type="checkbox" data-quantile="p25" checked> p25</label>
-          <label><input type="checkbox" data-quantile="p50" checked> p50</label>
-          <label><input type="checkbox" data-quantile="p90" checked> p90</label>
-          <label><input type="checkbox" data-quantile="p99" checked> p99</label>
-        </div>
-      </div>
-      <div>
         <label>&nbsp;</label><br>
         <button id="refreshButton">Refresh now</button>
       </div>
@@ -199,7 +179,6 @@
     const windowSelect = document.getElementById("windowSelect");
     const stepSelect = document.getElementById("stepSelect");
     const refreshButton = document.getElementById("refreshButton");
-    const quantileInputs = Array.from(document.querySelectorAll(".quantiles input"));
 
     const chartColors = {
       p25: "#d36c2f",
@@ -207,6 +186,8 @@
       p90: "#78b13f",
       p99: "#d95f5f"
     };
+
+    const hiddenQuantiles = new Set();
 
     function zoomOptions() {
       return {
@@ -228,73 +209,64 @@
       };
     }
 
-    const delayChart = new Chart(delayCtx, {
-      type: "scatter",
-      data: {
-        datasets: []
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: false,
-        parsing: false,
-        scales: {
-          x: {
-            type: "time",
-            time: {
-              unit: "minute"
-            },
-            title: { display: true, text: "Time" }
-          },
-          y: {
-            title: { display: true, text: "Delay (ms)" },
-            beginAtZero: true
-          }
+    function createLineChart({ ctx, titleText, legend }) {
+      return new Chart(ctx, {
+        type: "line",
+        data: {
+          datasets: []
         },
-        plugins: {
-          legend: { position: "bottom" },
-          zoom: zoomOptions()
-        }
-      }
-    });
-
-    const rawChart = new Chart(rawCtx, {
-      type: "scatter",
-      data: {
-        datasets: []
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: false,
-        parsing: false,
-        scales: {
-          x: {
-            type: "time",
-            time: {
-              unit: "minute"
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          parsing: false,
+          scales: {
+            x: {
+              type: "time",
+              time: {
+                unit: "minute"
+              },
+              title: { display: true, text: "Time" }
             },
-            title: { display: true, text: "Time" }
+            y: {
+              title: { display: true, text: "Delay (ms)" },
+              beginAtZero: true
+            }
           },
-          y: {
-            title: { display: true, text: "Delay (ms)" },
-            beginAtZero: true
+          plugins: {
+            title: {
+              display: Boolean(titleText),
+              text: titleText || ""
+            },
+            legend: legend || { position: "bottom" },
+            zoom: zoomOptions()
           }
-        },
-        plugins: {
-          legend: { position: "bottom" },
-          zoom: zoomOptions()
-        }
-      }
-    });
-
-    quantileInputs.forEach((input) => {
-      input.addEventListener("change", () => {
-        if (!quantileInputs.some((item) => item.checked)) {
-          input.checked = true;
         }
       });
+    }
+
+    const delayChart = createLineChart({
+      ctx: delayCtx,
+      legend: {
+        position: "bottom",
+        onClick: (event, legendItem, legend) => {
+          const index = legendItem.datasetIndex;
+          const chart = legend.chart;
+          const dataset = chart.data.datasets[index];
+          dataset.hidden = !dataset.hidden;
+          const key = dataset.label.toLowerCase();
+          if (dataset.hidden) {
+            hiddenQuantiles.add(key);
+          } else {
+            hiddenQuantiles.delete(key);
+          }
+          chart.update();
+        }
+      }
     });
+
+    const rawChart = createLineChart({ ctx: rawCtx });
+
 
     function toEpoch(dateString) {
       return new Date(dateString).getTime();
@@ -338,18 +310,18 @@
     }
 
     function renderDelayChart(quantileSeries) {
-      const enabled = quantileInputs
-        .filter((input) => input.checked)
-        .map((input) => input.dataset.quantile);
+      const quantiles = ["p25", "p50", "p90", "p99"];
 
-      const datasets = enabled.map((quantile) => ({
+      const datasets = quantiles.map((quantile) => ({
         label: quantile.toUpperCase(),
         data: quantileSeries[quantile] || [],
         borderColor: chartColors[quantile],
         backgroundColor: chartColors[quantile],
-        showLine: false,
+        fill: false,
+        tension: 0.1,
         borderWidth: 2,
-        pointRadius: 4
+        pointRadius: 4,
+        hidden: hiddenQuantiles.has(quantile)
       }));
 
       delayChart.data.datasets = datasets;
@@ -383,7 +355,9 @@
         data: entry.points,
         backgroundColor: palette[index % palette.length],
         borderColor: palette[index % palette.length],
-        pointRadius: 4
+        fill: false,
+        tension: 0.1,
+        pointRadius: 3
       }));
 
       rawChart.data.datasets = datasets;
@@ -424,7 +398,6 @@
     refreshInput.addEventListener("change", scheduleRefresh);
     windowSelect.addEventListener("change", refresh);
     stepSelect.addEventListener("change", refresh);
-    quantileInputs.forEach((input) => input.addEventListener("change", refresh));
 
     refresh();
     scheduleRefresh();
